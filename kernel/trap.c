@@ -6,7 +6,6 @@
 #include "proc.h"
 #include "defs.h"
 
-
 struct spinlock tickslock;
 uint ticks;
 
@@ -50,11 +49,8 @@ usertrap(void)
   
   // save user program counter.
   p->trapframe->epc = r_sepc();
-
-  uint64 scause = r_scause();
-  uint64 stval = r_stval();
-
-  if(scause == 8){
+  
+  if(r_scause() == 8){
     // system call
 
     if(killed(p))
@@ -71,36 +67,6 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
-  } else if(scause == 13 || scause == 15) { // load/store page fault
-    pte_t *pte = walk(p->pagetable, stval, 0);
-    if(pte == 0 || !(*pte & PTE_V) || !(*pte & PTE_U)) {
-      printf("usertrap(): page fault: invalid addr 0x%lx pid=%d\n", stval, p->pid);
-      setkilled(p);
-    } else if((*pte & PTE_COW) && (scause == 15)) { // only on write fault
-      // COW page fault
-      uint64 pa = PTE2PA(*pte);
-      char *mem;
-      if((mem = kalloc()) == 0){
-        printf("usertrap(): COW alloc failed\n");
-        setkilled(p);
-      } else {
-        // Copy the old page to the new page
-        memmove(mem, (char*)pa, PGSIZE);
-        // Unmap the old page and map the new one writable (remove COW)
-        uvmunmap(p->pagetable, PGROUNDDOWN(stval), 1, 0); // don't free old page yet!
-        if(mappages(p->pagetable, PGROUNDDOWN(stval), PGSIZE, (uint64)mem, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
-          kfree(mem);
-          setkilled(p);
-        } else {
-          kfree((void*)pa); // CORRECT
-			 // drop old page reference
-        }
-      }
-    } else {
-      // Read-only page, or other unhandled case
-      printf("usertrap(): unexpected page fault addr 0x%lx, scause=0x%lx, pte=0x%lx\n", stval, scause, *pte);
-      setkilled(p);
-    }
   } else {
     printf("usertrap(): unexpected scause 0x%lx pid=%d\n", r_scause(), p->pid);
     printf("            sepc=0x%lx stval=0x%lx\n", r_sepc(), r_stval());
@@ -116,7 +82,6 @@ usertrap(void)
 
   usertrapret();
 }
-
 
 //
 // return to user space

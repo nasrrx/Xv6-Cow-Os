@@ -9,9 +9,6 @@
 #include "riscv.h"
 #include "defs.h"
 
-#define MAX_PAGES ((PHYSTOP - KERNBASE) / PGSIZE)
-int krefcnt[MAX_PAGES];
-
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -25,30 +22,6 @@ struct {
   struct spinlock lock;
   struct run *freelist;
 } kmem;
-
-static inline int
-kref_idx(void *pa)
-{
-  return ((uint64)pa - KERNBASE) / PGSIZE;
-}
-
-void
-inc_ref(void *pa)
-{
-  int idx = kref_idx(pa);
-  acquire(&kmem.lock);
-  krefcnt[idx]++;
-  release(&kmem.lock);
-}
-
-void
-dec_ref(void *pa)
-{
-  int idx = kref_idx(pa);
-  acquire(&kmem.lock);
-  krefcnt[idx]--;
-  release(&kmem.lock);
-}
 
 void
 kinit()
@@ -66,8 +39,10 @@ freerange(void *pa_start, void *pa_end)
     kfree(p);
 }
 
-// Free the page of physical memory pointed at by pa.
-// Only actually free if its refcount drops to zero.
+// Free the page of physical memory pointed at by pa,
+// which normally should have been returned by a
+// call to kalloc().  (The exception is when
+// initializing the allocator; see kinit above.)
 void
 kfree(void *pa)
 {
@@ -75,14 +50,6 @@ kfree(void *pa)
 
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
-
-  int idx = kref_idx(pa);
-  acquire(&kmem.lock);
-  if(--krefcnt[idx] > 0){
-    release(&kmem.lock);
-    return; // still referenced, don't free
-  }
-  release(&kmem.lock);
 
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
@@ -109,10 +76,7 @@ kalloc(void)
     kmem.freelist = r->next;
   release(&kmem.lock);
 
-  if(r){
+  if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
-    krefcnt[kref_idx((void*)r)] = 1;
-  }
   return (void*)r;
 }
-
